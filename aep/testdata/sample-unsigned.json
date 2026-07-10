@@ -1,0 +1,174 @@
+{
+  "version": "aep/1",
+  "generatedAt": "2026-06-10T06:00:00Z",
+  "window": {
+    "from": "2026-06-10T02:00:00Z",
+    "to": "2026-06-10T04:00:00Z",
+    "region": "us-west-2"
+  },
+  "policy": {
+    "window": "20m0s",
+    "operationMap": {
+      "Bash(aws sts get-caller-identity)": [
+        "sts:GetCallerIdentity"
+      ]
+    }
+  },
+  "sessions": [
+    {
+      "ID": "s1",
+      "Agent": "claude-code",
+      "Human": "operator@example.com",
+      "Attribution": {
+        "Method": "declared",
+        "Evidence": [
+          "claude-code:/fixture.jsonl"
+        ]
+      },
+      "StartedAt": "2026-06-10T02:30:00Z",
+      "EndedAt": "2026-06-10T03:30:00Z"
+    }
+  ],
+  "conventions": [
+    {
+      "RoleARN": "arn:aws:iam::000000000000:role/agent",
+      "RequiresSourceIdentity": false,
+      "ForbidsSourceIdentity": false,
+      "AllowsTagSession": false,
+      "Evidence": {
+        "Locator": "iam:arn:aws:iam::000000000000:role/agent#trust-policy",
+        "Digest": "dddd"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "index": 0,
+      "finding": {
+        "Kind": "corroborated",
+        "SessionID": "s1",
+        "Claim": {
+          "ID": "toolu_1",
+          "SessionID": "s1",
+          "Source": "claude-code-transcript",
+          "Operation": "Bash(aws sts get-caller-identity)",
+          "Target": "aws sts get-caller-identity",
+          "ClaimedAt": "2026-06-10T03:00:00Z",
+          "Raw": {
+            "Locator": "claude-code:/fixture.jsonl#u1/toolu_1",
+            "Digest": "cccc"
+          }
+        },
+        "Record": {
+          "ID": "evt-1",
+          "Source": "cloudtrail",
+          "Operation": "sts:GetCallerIdentity",
+          "Principal": "arn:aws:sts::000000000000:assumed-role/agent/fixture",
+          "SourceIdentity": "",
+          "AccessKeyID": "ASIAFIXTURE0000001",
+          "Targets": null,
+          "RecordedAt": "2026-06-10T03:00:03Z",
+          "ProductionTouching": false,
+          "Raw": {
+            "Locator": "cloudtrail:us-west-2/evt-1",
+            "Digest": "aaaa"
+          }
+        },
+        "Why": "claim corroborated by cloudtrail record evt-1"
+      },
+      "digest": "5dc7b77183461ff78fd73948cc986a32ac8688130bd414e83dedfcf8e35fb336",
+      "prev": "96e6ffd05b13acb208d7d55bd19f87b5bf1393bfde2d82a0da83f434338d1939",
+      "link": "6aced9a902263b23d4f67501dd5bfdc74f14bcd1e4029e40fbf4cb2f87389e52"
+    },
+    {
+      "index": 1,
+      "finding": {
+        "Kind": "unclaimed-record",
+        "SessionID": "s1",
+        "Claim": null,
+        "Record": {
+          "ID": "evt-2",
+          "Source": "cloudtrail",
+          "Operation": "s3:CreateBucket",
+          "Principal": "arn:aws:sts::000000000000:assumed-role/agent/fixture",
+          "SourceIdentity": "",
+          "AccessKeyID": "",
+          "Targets": null,
+          "RecordedAt": "2026-06-10T03:05:00Z",
+          "ProductionTouching": true,
+          "Raw": {
+            "Locator": "cloudtrail:us-west-2/evt-2",
+            "Digest": "bbbb"
+          }
+        },
+        "Why": "infrastructure recorded this action inside an agent session window; no claim accounts for it"
+      },
+      "digest": "87444e29e949c0ad532d2396da502e68c4bcbeaf8a121d802eebeb49a440c945",
+      "prev": "6aced9a902263b23d4f67501dd5bfdc74f14bcd1e4029e40fbf4cb2f87389e52",
+      "link": "bc600dbcc2927ed65d98893615aca719dff848013ab2f92333482abe4a92cb37"
+    },
+    {
+      "index": 2,
+      "finding": {
+        "Kind": "unattributed",
+        "SessionID": "s1",
+        "Claim": null,
+        "Record": {
+          "ID": "evt-2",
+          "Source": "cloudtrail",
+          "Operation": "s3:CreateBucket",
+          "Principal": "arn:aws:sts::000000000000:assumed-role/agent/fixture",
+          "SourceIdentity": "",
+          "AccessKeyID": "",
+          "Targets": null,
+          "RecordedAt": "2026-06-10T03:05:00Z",
+          "ProductionTouching": true,
+          "Raw": {
+            "Locator": "cloudtrail:us-west-2/evt-2",
+            "Digest": "bbbb"
+          }
+        },
+        "Why": "production-touching action with agent fingerprints and no named human binding"
+      },
+      "digest": "30ebfc8346faa53b59d9972b4ee0aabe8c152cf36c9d73c6f5bcaeba76e4cc3f",
+      "prev": "bc600dbcc2927ed65d98893615aca719dff848013ab2f92333482abe4a92cb37",
+      "link": "27e69264a50249a820286592778fcbbf0119b85de6da135b48e12fcb62ceb928"
+    }
+  ],
+  "chain": {
+    "algo": "sha256-hex-concat",
+    "genesis": "96e6ffd05b13acb208d7d55bd19f87b5bf1393bfde2d82a0da83f434338d1939",
+    "head": "27e69264a50249a820286592778fcbbf0119b85de6da135b48e12fcb62ceb928",
+    "length": 3
+  },
+  "controls": [
+    {
+      "control": "CC6.1",
+      "name": "Logical and physical access controls — identification and attribution",
+      "statement": "agent actions bound (or provably not bindable) to named humans",
+      "findingIndexes": [
+        2
+      ],
+      "conventionRoles": [
+        "arn:aws:iam::000000000000:role/agent"
+      ]
+    },
+    {
+      "control": "CC7.2",
+      "name": "System monitoring — anomaly detection",
+      "statement": "agent claims corroborated against infrastructure records; divergences surfaced",
+      "findingIndexes": [
+        0,
+        1
+      ]
+    },
+    {
+      "control": "CC8.1",
+      "name": "Change management — authorized and tracked changes",
+      "statement": "recorded changes reconciled against the actor's own account of them",
+      "findingIndexes": [
+        1
+      ]
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+# The verifier's bar: format, vet, tests against real engine-produced
+# fixtures, a fuzz smoke on the document parser, and govulncheck. The
+# dependency check is the product property made mechanical: go.sum must
+# not exist, because the standard library is the entire supply chain.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: zero dependencies
+        run: test ! -f go.sum || { echo "go.sum exists — the supply chain is no longer just the stdlib"; exit 1; }
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -count=1
+
+      - name: fuzz smoke (15s)
+        run: go test ./aep -run '^$' -fuzz FuzzVerify -fuzztime 15s
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
