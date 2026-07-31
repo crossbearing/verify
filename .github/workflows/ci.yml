@@ -8,6 +8,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The govulncheck gate below is only true as of the last push. A CVE disclosed
+  # against an unchanged tree — including one in the pinned Go toolchain, which
+  # is how GO-2026-4970 and GO-2026-5856 sat here unnoticed — is invisible until
+  # someone happens to commit. Re-run the whole gate weekly. Mondays 07:00 UTC;
+  # the org's repos are staggered by 30 minutes.
+  schedule:
+    - cron: "0 7 * * 1"
+  # and on demand, for when an advisory lands and waiting until Monday is wrong
+  workflow_dispatch:
 
 permissions:
   contents: read
