@@ -275,7 +275,7 @@ func TestVerify_RejectsDuplicateTopLevelMembers(t *testing.T) {
 			if err == nil {
 				t.Fatalf("duplicate %q accepted: %+v", tt.member, res)
 			}
-			if !strings.Contains(err.Error(), "duplicate top-level member") ||
+			if !strings.Contains(err.Error(), "duplicate member") ||
 				!strings.Contains(err.Error(), tt.member) {
 				t.Fatalf("err = %v, want a duplicate-member rejection naming %q", err, tt.member)
 			}
@@ -290,7 +290,7 @@ func TestVerify_RejectsDuplicateTopLevelMembers(t *testing.T) {
 // trusting every caller to have gone through Parse first.
 func TestCanonicalPayload_RejectsDuplicatesDirectly(t *testing.T) {
 	doc := []byte(`{"a":1,"b":2,"a":3}`)
-	if _, err := CanonicalPayload(doc); err == nil || !strings.Contains(err.Error(), `duplicate top-level member "a"`) {
+	if _, err := CanonicalPayload(doc); err == nil || !strings.Contains(err.Error(), `duplicate member "a"`) {
 		t.Fatalf("err = %v, want duplicate-member rejection", err)
 	}
 	if _, err := CanonicalPayload([]byte(`{"a":1,"b":2}`)); err != nil {
@@ -522,5 +522,139 @@ func TestVerifySignature_PropagatesCanonicalizationFailure(t *testing.T) {
 	}
 	if err := VerifySignature([]byte(`{"version":`), p, pub); err == nil {
 		t.Fatal("canonicalization failure was not propagated")
+	}
+}
+
+// The shallow fix is not a fix. A finding carrying a duplicate hash-chains and
+// signs exactly as consistently as an honest one — compact() preserves both
+// members, so the digest is stable and every internal check agrees — while a
+// last-wins reader and a first-wins reader still see different evidence.
+func TestVerify_RejectsDuplicatesInsideFindings(t *testing.T) {
+	nested := buildDoc(t, `{"id":"benign","id":"malicious"}`)
+
+	// The document is internally consistent: this is not a chain failure.
+	res, err := Verify(nested, nil)
+	if err == nil {
+		t.Fatalf("a finding carrying a duplicate member verified: %+v", res)
+	}
+	if !strings.Contains(err.Error(), `duplicate member "id"`) {
+		t.Fatalf("err = %v, want the duplicated member named", err)
+	}
+	if !strings.Contains(err.Error(), "findings[0].finding") {
+		t.Fatalf("err = %v, want the location named so it can be found", err)
+	}
+}
+
+func TestValidateDocument_RejectsDuplicatesAtEveryDepth(t *testing.T) {
+	tests := []struct {
+		name     string
+		doc      string
+		wantPath string
+	}{
+		{"top level", `{"a":1,"a":2}`, "at the top level"},
+		{"one level down", `{"outer":{"a":1,"a":2}}`, "at outer"},
+		{"inside an array", `{"list":[{"a":1,"a":2}]}`, "at list[0]"},
+		{"deeper still", `{"a":{"b":{"c":{"d":1,"d":2}}}}`, "at a.b.c"},
+		{"second element of an array", `{"list":[{"ok":1},{"a":1,"a":2}]}`, "at list[1]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validateDocument([]byte(tt.doc))
+			if err == nil {
+				t.Fatalf("accepted %s", tt.doc)
+			}
+			if !strings.Contains(err.Error(), tt.wantPath) {
+				t.Errorf("err = %v, want location %q", err, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestValidateDocument_AcceptsHonestNesting(t *testing.T) {
+	// Same key name at sibling positions is not a duplicate.
+	ok := `{"a":{"id":1},"b":{"id":2},"list":[{"id":3},{"id":4}]}`
+	if _, err := validateDocument([]byte(ok)); err != nil {
+		t.Fatalf("rejected a well-formed document: %v", err)
+	}
+}
+
+// A hostile document must be refused rather than exhaust the stack. The
+// verifier's own toolchain advisory this month was a missing recursion bound in
+// encoding/asn1, which is the same failure in a neighbouring parser.
+func TestValidateDocument_BoundsNesting(t *testing.T) {
+	deep := strings.Repeat(`{"a":`, maxNestingDepth+50) + `1` + strings.Repeat(`}`, maxNestingDepth+50)
+	_, err := validateDocument([]byte(deep))
+	if err == nil {
+		t.Fatal("unbounded nesting accepted")
+	}
+	if !strings.Contains(err.Error(), "nested deeper than") {
+		t.Fatalf("err = %v, want a depth rejection", err)
+	}
+
+	deepArray := strings.Repeat(`[`, maxNestingDepth+50) + strings.Repeat(`]`, maxNestingDepth+50)
+	if _, err := validateDocument([]byte(`{"a":` + deepArray + `}`)); err == nil {
+		t.Fatal("unbounded array nesting accepted")
+	}
+
+	fine := strings.Repeat(`{"a":`, 20) + `1` + strings.Repeat(`}`, 20)
+	if _, err := validateDocument([]byte(fine)); err != nil {
+		t.Fatalf("ordinary nesting rejected: %v", err)
+	}
+}
+
+func TestValidateDocument_RejectsMalformedNesting(t *testing.T) {
+	for _, doc := range []string{
+		`{"a":{`,
+		`{"a":[`,
+		`{"a":[1,`,
+		`{"a":{"b":`,
+	} {
+		if _, err := validateDocument([]byte(doc)); err == nil {
+			t.Errorf("accepted malformed %q", doc)
+		}
+	}
+}
+
+// validateValue and validateObject are driven by validateDocument, which decodes
+// each top-level value with encoding/json first — so by the time the walker runs,
+// syntax is already guaranteed and its error paths cannot fire from there. They
+// are still part of the contract of an internal walker, so they are exercised
+// directly rather than left unstated.
+func TestValidateWalker_ReportsMalformedInputDirectly(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"value cut off", `{`, "unterminated object"},
+		{"member name cut off", `{"a":1,`, "unreadable member name"},
+		{"nested value cut off", `{"a":`, "unreadable value"},
+		{"array cut off", `[1,2`, "unterminated array"},
+		{"array element cut off", `[`, "unterminated array"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec := json.NewDecoder(strings.NewReader(tt.raw))
+			err := validateValue(dec, "x", 1)
+			if err == nil {
+				t.Fatalf("validateValue(%q) returned nil", tt.raw)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// A closing delimiter cannot reach validateValue through validateDocument, since
+// it is only called where dec.More() reports another value. Pinned so the
+// fallback keeps stating what it does.
+func TestValidateValue_RejectsUnexpectedDelimiter(t *testing.T) {
+	dec := json.NewDecoder(strings.NewReader(`[]`))
+	if _, err := dec.Token(); err != nil { // consume '['
+		t.Fatal(err)
+	}
+	if err := validateValue(dec, "x", 1); err == nil || !strings.Contains(err.Error(), "unexpected") {
+		t.Fatalf("err = %v, want an unexpected-delimiter rejection", err)
 	}
 }
