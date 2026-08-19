@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crossbearing/verify/aep"
 )
 
 const (
@@ -248,5 +252,154 @@ func TestRun_UsagePrintedOncePerFailure(t *testing.T) {
 				t.Errorf("usage block printed %d times, want exactly 1:\n%s", n, stderr)
 			}
 		})
+	}
+}
+
+// scenarios covers every distinct outcome the command can reach. The mode
+// tests below run the whole set through both output modes rather than
+// spot-checking, because the regression this guards against is a path nobody
+// exercised — the same shape as -h returning 2 after the ContinueOnError move.
+func scenarios(t *testing.T) []struct {
+	name string
+	args []string
+} {
+	t.Helper()
+
+	tampered := filepath.Join(t.TempDir(), "tampered.json")
+	doc, err := os.ReadFile(signedFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc = bytes.Replace(doc, []byte("no claim accounts for it"), []byte("nothing to see here at all"), 1)
+	if err := os.WriteFile(tampered, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return []struct {
+		name string
+		args []string
+	}{
+		{"signed and fully verified", []string{signedFixture, "--public-key", keyFixture}},
+		{"signed, unchecked, accepted", []string{signedFixture, "--chain-only"}},
+		{"signed, unchecked, refused", []string{signedFixture}},
+		{"explicitly unsigned", []string{unsignedFixture}},
+		{"tampered content", []string{tampered, "--public-key", keyFixture}},
+		{"tampered, chain-only", []string{tampered, "--chain-only"}},
+	}
+}
+
+// The exit code is the contract a script reads. Adding an output mode must not
+// change it for any input — a --json run that exits differently from the prose
+// run would make the flag load-bearing for correctness rather than presentation.
+func TestRun_ExitCodeIsIdenticalInBothModes(t *testing.T) {
+	for _, tt := range scenarios(t) {
+		t.Run(tt.name, func(t *testing.T) {
+			proseCode, _, _ := exec(t, tt.args...)
+			jsonCode, _, _ := exec(t, append(append([]string{}, tt.args...), "--json")...)
+			if proseCode != jsonCode {
+				t.Fatalf("exit differs by output mode: prose=%d json=%d", proseCode, jsonCode)
+			}
+		})
+	}
+}
+
+// The machine-readable verdict and the exit code are the same decision rendered
+// twice. A document reporting success beside a failing exit code would be this
+// repository's own thesis violated inside its own verifier.
+func TestRun_JSONVerdictAgreesWithExitCode(t *testing.T) {
+	for _, tt := range scenarios(t) {
+		t.Run(tt.name, func(t *testing.T) {
+			code, stdout, _ := exec(t, append(append([]string{}, tt.args...), "--json")...)
+
+			var report aep.Report
+			if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+				t.Fatalf("stdout is not the published result document: %v\nstdout: %s", err, stdout)
+			}
+			if report.Verified != (code == exitOK) {
+				t.Fatalf("verified=%v but exit=%d — the verdict and the exit code disagree\n%s",
+					report.Verified, code, stdout)
+			}
+			// A failure must say why; a success must not carry an error.
+			if report.Verified && report.Error != "" {
+				t.Errorf("successful result carries an error: %q", report.Error)
+			}
+			if !report.Verified && report.Error == "" {
+				t.Error("failed result gives no reason")
+			}
+		})
+	}
+}
+
+// stdout must carry the result document and nothing else, so it can be piped
+// without filtering. Diagnostics belong on stderr in both modes.
+func TestRun_JSONStdoutIsOnlyTheDocument(t *testing.T) {
+	for _, tt := range scenarios(t) {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stdout, _ := exec(t, append(append([]string{}, tt.args...), "--json")...)
+			var any map[string]any
+			if err := json.Unmarshal([]byte(stdout), &any); err != nil {
+				t.Fatalf("stdout is not a single JSON document: %v\nstdout: %s", err, stdout)
+			}
+			if strings.Contains(stdout, "chain      OK") || strings.Contains(stdout, "verify: FAILED") {
+				t.Errorf("prose leaked into the JSON stream:\n%s", stdout)
+			}
+		})
+	}
+}
+
+// Prose stays the default: a human running this should not need `| jq`.
+func TestRun_ProseIsTheDefault(t *testing.T) {
+	_, stdout, _ := exec(t, signedFixture, "--public-key", keyFixture)
+	if strings.HasPrefix(strings.TrimSpace(stdout), "{") {
+		t.Fatalf("default output is JSON, want prose:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "chain      OK") {
+		t.Fatalf("default output is not the prose form:\n%s", stdout)
+	}
+}
+
+// The reported signature state must distinguish the three cases a consumer
+// needs to tell apart, including the two that both exit non-zero.
+func TestRun_JSONSignatureStates(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		state string
+	}{
+		{"verified", []string{signedFixture, "--public-key", keyFixture}, aep.SignatureVerified},
+		{"unchecked but accepted", []string{signedFixture, "--chain-only"}, aep.SignatureUnchecked},
+		{"unchecked and refused", []string{signedFixture}, aep.SignatureUnchecked},
+		{"absent", []string{unsignedFixture}, aep.SignatureAbsent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stdout, _ := exec(t, append(append([]string{}, tt.args...), "--json")...)
+			var report aep.Report
+			if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+				t.Fatal(err)
+			}
+			if report.Signature.State != tt.state {
+				t.Errorf("signature.state = %q, want %q", report.Signature.State, tt.state)
+			}
+		})
+	}
+}
+
+// failingWriter stands in for a closed pipe: `verify --json | head -1` closes
+// stdout while the encoder is still writing, and a tool that reported success
+// after failing to deliver its result would be lying about the delivery.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+func TestRun_JSONReportsAFailureToWriteTheResult(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{signedFixture, "--public-key", keyFixture, "--json"}, failingWriter{}, &stderr)
+
+	if code == exitOK {
+		t.Errorf("exit = %d, want non-zero when the result could not be written", code)
+	}
+	if !strings.Contains(stderr.String(), "broken pipe") {
+		t.Errorf("stderr = %q, want the write failure reported", stderr.String())
 	}
 }

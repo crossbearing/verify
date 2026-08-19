@@ -27,26 +27,33 @@ import (
 // prevent. Adding a keyword to the schema fails this test until the checker
 // learns it.
 
-const schemaPath = "../schema/aep-1.schema.json"
+// Every schema this repository publishes. Each is held to the same rule: the
+// checker must enforce every keyword it uses, or the test refuses to run.
+const aepSchema = "../schema/aep-1.schema.json"
+
+var publishedSchemas = []string{
+	"../schema/aep-1.schema.json",
+	"../schema/verify-result-1.schema.json",
+}
 
 var knownKeywords = map[string]bool{
 	// Structural, carried but not asserted on.
 	"$schema": true, "$id": true, "$defs": true,
 	"title": true, "description": true,
 	// Asserted.
-	"$ref": true, "type": true, "const": true, "required": true,
+	"$ref": true, "type": true, "const": true, "enum": true, "required": true,
 	"properties": true, "items": true, "pattern": true, "minimum": true,
 }
 
-func loadSchema(t *testing.T) map[string]any {
+func loadSchema(t *testing.T, path string) map[string]any {
 	t.Helper()
-	b, err := os.ReadFile(schemaPath)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var s map[string]any
 	if err := json.Unmarshal(b, &s); err != nil {
-		t.Fatalf("%s is not valid JSON: %v", schemaPath, err)
+		t.Fatalf("%s is not valid JSON: %v", path, err)
 	}
 	return s
 }
@@ -77,13 +84,17 @@ func unknownKeywords(node any, path string, found *[]string) {
 }
 
 func TestSchema_UsesOnlyKeywordsThisCheckerEnforces(t *testing.T) {
-	var found []string
-	unknownKeywords(loadSchema(t), "$", &found)
-	if len(found) > 0 {
-		sort.Strings(found)
-		t.Fatalf("schema uses keywords this checker does not enforce, so validating "+
-			"against it would pass vacuously:\n  %s\nTeach the checker these "+
-			"keywords or drop them from the schema.", strings.Join(found, "\n  "))
+	for _, path := range publishedSchemas {
+		t.Run(path, func(t *testing.T) {
+			var found []string
+			unknownKeywords(loadSchema(t, path), "$", &found)
+			if len(found) > 0 {
+				sort.Strings(found)
+				t.Fatalf("%s uses keywords this checker does not enforce, so validating "+
+					"against it would pass vacuously:\n  %s\nTeach the checker these "+
+					"keywords or drop them from the schema.", path, strings.Join(found, "\n  "))
+			}
+		})
 	}
 }
 
@@ -122,6 +133,19 @@ func check(t *testing.T, root, schema map[string]any, value any, path string, ou
 
 	if want, ok := schema["const"]; ok && !jsonEqual(want, value) {
 		fail("is %v, want the constant %v", value, want)
+	}
+
+	if allowed, ok := schema["enum"].([]any); ok {
+		matched := false
+		for _, want := range allowed {
+			if jsonEqual(want, value) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			fail("is %v, want one of %v", value, allowed)
+		}
 	}
 
 	if pat, ok := schema["pattern"].(string); ok {
@@ -217,9 +241,9 @@ func toStrings(v any) []string {
 	return out
 }
 
-func validateAgainstSchema(t *testing.T, doc []byte) []string {
+func validateAgainstSchema(t *testing.T, schemaFile string, doc []byte) []string {
 	t.Helper()
-	root := loadSchema(t)
+	root := loadSchema(t, schemaFile)
 	var value any
 	if err := json.Unmarshal(doc, &value); err != nil {
 		t.Fatalf("document is not JSON: %v", err)
@@ -234,7 +258,7 @@ func validateAgainstSchema(t *testing.T, doc []byte) []string {
 func TestSchema_RealFixturesValidate(t *testing.T) {
 	for _, name := range []string{"sample-signed.json", "sample-unsigned.json"} {
 		t.Run(name, func(t *testing.T) {
-			if problems := validateAgainstSchema(t, load(t, name)); len(problems) > 0 {
+			if problems := validateAgainstSchema(t, aepSchema, load(t, name)); len(problems) > 0 {
 				t.Fatalf("engine-produced fixture fails the published schema:\n  %s",
 					strings.Join(problems, "\n  "))
 			}
@@ -337,7 +361,7 @@ func TestSchema_CatchesShapeViolations(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			problems := validateAgainstSchema(t, mutated)
+			problems := validateAgainstSchema(t, aepSchema, mutated)
 			if len(problems) == 0 {
 				t.Fatalf("schema accepted a document with %s", tt.name)
 			}
@@ -370,7 +394,7 @@ func TestSchema_CannotSubstituteForVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if problems := validateAgainstSchema(t, mutated); len(problems) > 0 {
+	if problems := validateAgainstSchema(t, aepSchema, mutated); len(problems) > 0 {
 		t.Fatalf("expected a forged-but-well-shaped document to satisfy the schema, got:\n  %s",
 			strings.Join(problems, "\n  "))
 	}

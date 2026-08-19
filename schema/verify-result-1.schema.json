@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crossbearing.dev/schema/verify-result-1.schema.json",
+  "title": "verify --json result",
+  "description": "What `verify --json` writes to stdout, and what the aep package's Report type marshals to. Read `verified` to decide whether the package verified: it is true only when every check the caller asked for actually ran and passed, and it agrees with the command's exit status in every case — true with exit 0, false with a non-zero exit. The other members are evidence for that verdict, not inputs to recombine into one. In particular a chain that verified says nothing about whether a signature went unchecked, so `chain.verified` alone must never be read as 'the package verified'. Diagnostics and failure messages go to stderr; stdout carries this document and nothing else, so it can be piped without filtering.",
+  "type": "object",
+  "required": ["verified", "chain", "signature"],
+  "properties": {
+    "verified": {
+      "description": "True only if every requested check ran and passed. Equivalent to exit status 0. This is the field to branch on.",
+      "type": "boolean"
+    },
+    "chain": {
+      "description": "The hash chain, which is checked on every run regardless of whether a key was supplied.",
+      "type": "object",
+      "required": ["verified", "links"],
+      "properties": {
+        "verified": {
+          "description": "True when every finding's digest, every link, the genesis binding, the head, and the declared length all re-derived from the document's own bytes.",
+          "type": "boolean"
+        },
+        "links": {
+          "description": "Number of findings that re-derived. Zero is legitimate: a package may carry no findings and still be well-formed.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "signature": {
+      "description": "The detached signature. A signature that is present but unchecked is not reported as a kind of failure — whether it is one depends on what the caller asked for, and that judgement is carried by the top-level verified member.",
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "description": "absent: the package carries no signature and says so. verified: a signature was checked against a supplied key and matched. unchecked: a signature is present and was not checked, because no key was supplied.",
+          "enum": ["absent", "verified", "unchecked"]
+        },
+        "keyRef": {
+          "description": "The key identifier the package carries. Reported, never trusted: verification checks the signature against the key the caller supplied, not against this string. Absent when the package carries no signature.",
+          "type": "string"
+        }
+      }
+    },
+    "error": {
+      "description": "Why verification failed, in the same words the prose output uses. Absent when verified is true.",
+      "type": "string"
+    }
+  }
+}
