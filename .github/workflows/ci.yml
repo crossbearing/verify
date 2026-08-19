@@ -126,4 +126,16 @@ jobs:
 
       - name: govulncheck
         if: ${{ !cancelled() }}
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        env:
+          # The version is hoisted into an env var so Renovate can track it. The
+          # org preset's customManager matches an annotated `*_VERSION:` binding,
+          # not an inline `tool@version` — a `# renovate:` comment above the run
+          # line below would parse, look correct, and track nothing.
+          #
+          # datasource=go resolves against the module proxy, which is what
+          # `go run` itself uses. Not github-releases: golang/vuln stopped
+          # cutting Release objects after v1.1.4 while continuing to tag, so
+          # that datasource would watch a source frozen six minor versions back.
+          # renovate: datasource=go depName=golang.org/x/vuln
+          GOVULNCHECK_VERSION: "v1.7.0"
+        run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
