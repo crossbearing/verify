@@ -84,6 +84,12 @@ type ChainHead struct {
 }
 
 // SignatureBundle is the detached signature envelope.
+//
+// The PascalCase member names are deliberate and must not be "fixed" to match
+// the lowercase members above: aep/1 documents carry this bundle exactly as
+// the producer's encoding/json emits it from an untagged struct, so the wire
+// names really are capitalized. Renaming them here would stop this verifier
+// reading real packages.
 type SignatureBundle struct {
 	Signature []byte `json:"Signature"`
 	KeyRef    string `json:"KeyRef"`
@@ -102,6 +108,9 @@ type Result struct {
 
 // Parse decodes and structurally validates an aep/1 document.
 func Parse(doc []byte) (*Package, error) {
+	if err := checkNoDuplicateMembers(doc); err != nil {
+		return nil, err
+	}
 	var p Package
 	if err := json.Unmarshal(doc, &p); err != nil {
 		return nil, fmt.Errorf("not a JSON document: %w", err)
@@ -222,6 +231,7 @@ func CanonicalPayload(doc []byte) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteByte('{')
 	first := true
+	seen := make(map[string]bool)
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
@@ -235,6 +245,10 @@ func CanonicalPayload(doc []byte) ([]byte, error) {
 		if err := dec.Decode(&raw); err != nil {
 			return nil, fmt.Errorf("unreadable value for %q: %w", key, err)
 		}
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate top-level member %q: the document states it twice, and readers disagree about which one counts", key)
+		}
+		seen[key] = true
 		if key == "signature" {
 			continue
 		}
@@ -250,6 +264,12 @@ func CanonicalPayload(doc []byte) ([]byte, error) {
 			return nil, fmt.Errorf("value for %q: %w", key, err)
 		}
 		out.Write(canon)
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, fmt.Errorf("unterminated document: %w", err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("trailing content after the top-level object")
 	}
 	out.WriteByte('}')
 	return out.Bytes(), nil
@@ -279,6 +299,61 @@ func ParsePublicKey(material []byte) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("key is %T, want ECDSA (the aep/1 signing algorithm)", pub)
 	}
 	return ec, nil
+}
+
+// checkNoDuplicateMembers rejects a document whose top-level object names any
+// member more than once. CanonicalPayload repeats this check inline rather than
+// calling here, because it already walks the members and a second pass would
+// make its own guards unreachable; Parse has no such walk and calls this.
+//
+// Go's encoding/json resolves a repeated member last-wins; other readers take
+// the first. A document carrying two "signature" members therefore verifies
+// against one of them here while a different tool shows the other, and under
+// chain-only verification a second "findings" array passes unexamined. Either
+// way the document says two things at once and the reader who checked it and
+// the reader who didn't disagree about what was checked — which is precisely
+// what a verifier claiming "these bytes are what was signed" cannot permit.
+//
+// Duplicates are rejected rather than resolved: no reading of such a document
+// is more correct than another, so the only honest answer is to refuse it.
+func checkNoDuplicateMembers(doc []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(doc))
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("unreadable document: %w", err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return fmt.Errorf("document is not a JSON object")
+	}
+	seen := make(map[string]bool)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("unreadable member name: %w", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return fmt.Errorf("non-string member name %v", keyTok)
+		}
+		if seen[key] {
+			return fmt.Errorf("duplicate top-level member %q: the document states it twice, and readers disagree about which one counts", key)
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return fmt.Errorf("unreadable value for %q: %w", key, err)
+		}
+	}
+	// Consume the closing brace. Without this a truncated document ends the
+	// member loop at EOF and reads as a well-formed empty object, so `{` would
+	// canonicalize to `{}` rather than being refused.
+	if _, err := dec.Token(); err != nil {
+		return fmt.Errorf("unterminated document: %w", err)
+	}
+	if dec.More() {
+		return fmt.Errorf("trailing content after the top-level object")
+	}
+	return nil
 }
 
 // genesisHash mirrors the producer: sha256 over the canonical JSON of
