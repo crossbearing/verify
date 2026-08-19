@@ -204,3 +204,49 @@ func TestReadBounded_PropagatesReadErrors(t *testing.T) {
 		t.Fatal("reading a directory as a document succeeded")
 	}
 }
+
+// -h and --help are a request, not a mistake. The pre-refactor command answered
+// them with exit 0 via flag.ExitOnError, and that has to survive the move to
+// ContinueOnError — a help flag that exits non-zero breaks any script that runs
+// `verify --help` to probe for the tool.
+func TestRun_HelpExitsZero(t *testing.T) {
+	for _, args := range [][]string{
+		{"-h"},
+		{"--help"},
+		{signedFixture, "-h"},
+		{signedFixture, "--help"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			code, _, stderr := exec(t, args...)
+			if code != exitOK {
+				t.Errorf("exit = %d, want %d for a help request", code, exitOK)
+			}
+			if !strings.Contains(stderr, "usage:") {
+				t.Errorf("stderr = %q, want the usage block", stderr)
+			}
+		})
+	}
+}
+
+// The FlagSet prints its own complaint and usage block. Printing a second one
+// buries the line that actually says what went wrong.
+func TestRun_UsagePrintedOncePerFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"unknown flag before the path", []string{"--nope", signedFixture}},
+		{"unknown flag after the path", []string{signedFixture, "--nope"}},
+		{"no arguments", nil},
+		{"second package path", []string{signedFixture, unsignedFixture}},
+		{"help", []string{"-h"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, stderr := exec(t, tt.args...)
+			if n := strings.Count(stderr, usageString); n != 1 {
+				t.Errorf("usage block printed %d times, want exactly 1:\n%s", n, stderr)
+			}
+		})
+	}
+}

@@ -64,11 +64,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	docPath, err := parseArgs(fs, args)
-	if err != nil {
-		// flag's own errors are already reported by the FlagSet.
-		if !errors.Is(err, flag.ErrHelp) && err != errFlagReported {
-			fmt.Fprintln(stderr, "verify:", err)
-		}
+	switch {
+	case err == nil:
+		// fall through to verification
+	case errors.Is(err, flag.ErrHelp):
+		// -h and --help are a request, not a mistake, and the FlagSet has
+		// already printed the usage they asked for.
+		return exitOK
+	case errors.Is(err, errFlagReported):
+		// The FlagSet printed both the complaint and the usage block; saying
+		// it again would only make the real message harder to find.
+		return exitUsage
+	default:
+		fmt.Fprintln(stderr, "verify:", err)
 		fs.Usage()
 		return exitUsage
 	}
@@ -117,6 +125,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 // the caller does not report it twice.
 var errFlagReported = errors.New("flag parse error")
 
+// classifyParseError keeps flag.ErrHelp distinguishable from a real failure.
+// Both have already been reported by the FlagSet, but one of them is a request
+// the user made deliberately and must not be answered with a failing exit code.
+func classifyParseError(err error) error {
+	if errors.Is(err, flag.ErrHelp) {
+		return err
+	}
+	return errFlagReported
+}
+
 // parseArgs accepts the package path before or after the flags.
 //
 // Go's flag package stops at the first non-flag argument, so a single Parse
@@ -130,7 +148,7 @@ func parseArgs(fs *flag.FlagSet, args []string) (string, error) {
 		return "", errors.New("no package given")
 	}
 	if err := fs.Parse(args); err != nil {
-		return "", errFlagReported
+		return "", classifyParseError(err)
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
@@ -139,7 +157,7 @@ func parseArgs(fs *flag.FlagSet, args []string) (string, error) {
 	docPath := rest[0]
 	if len(rest) > 1 {
 		if err := fs.Parse(rest[1:]); err != nil {
-			return "", errFlagReported
+			return "", classifyParseError(err)
 		}
 		if extra := fs.Args(); len(extra) > 0 {
 			return "", fmt.Errorf("unexpected extra argument %q (one package at a time)", extra[0])
