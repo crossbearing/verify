@@ -107,6 +107,20 @@ it cannot drift from the parser without the build going red.
 `VerifySignature`, `CanonicalPayload`, and `ParsePublicKey` for embedding
 verification in your own tooling.
 
+## Reporting a problem
+
+Security reports go through the
+[crossbearing security policy](https://github.com/crossbearing/.github/blob/main/SECURITY.md),
+which covers this repository. GitHub's **Report a vulnerability** button on this
+repo opens a private advisory; email works too. Please don't use a public issue
+or pull request for a suspected vulnerability.
+
+The report this tool most wants is a package that **verifies when it should
+not** — a way to alter, reorder, drop, splice, or transplant findings that the
+hash chain or the signature fails to catch, or any flaw in the canonicalization
+the signature depends on. A verifier that wrongly rejects is a bug; a verifier
+that wrongly accepts is the failure this repository exists to make impossible.
+
 ## License
 
 [MIT](LICENSE). The engine that produces these packages lives in a
