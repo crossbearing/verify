@@ -1,2 +1,4 @@
 verify
 /dist/
+cover.out
+cover.log

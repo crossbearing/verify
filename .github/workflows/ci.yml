@@ -1,7 +1,8 @@
 # The verifier's bar: format, vet, tests against real engine-produced
-# fixtures, a fuzz smoke on the document parser, and govulncheck. The
-# dependency check is the product property made mechanical: go.sum must
-# not exist, because the standard library is the entire supply chain.
+# fixtures held to a coverage floor, a fuzz smoke on the document parser,
+# and govulncheck at a pinned version. The dependency check is the product
+# property made mechanical: go.sum must not exist, because the standard
+# library is the entire supply chain.
 name: ci
 
 on:
@@ -40,11 +41,52 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: go test
-        run: go test ./... -count=1
+      - name: go test + coverage floor
+        env:
+          # The org floor is 75% of statements. These two packages carry the
+          # signature verification and the fail-closed exit, which the testing
+          # rubric singles out as security-critical and asks for 100% on.
+          #
+          # 100% is not attainable here without deleting correct code. Three
+          # statements in aep are unreachable by construction: two `.(string)`
+          # assertions on JSON object keys, which the decoder guarantees are
+          # strings, and one compact() error on bytes dec.Decode already
+          # validated. They are required by Go's any-returning Token API. main()
+          # is likewise uncoverable, being the os.Exit wrapper around run().
+          #
+          # So the floor is set high enough to catch a real regression and low
+          # enough not to demand the removal of defensive code. Raise it when
+          # coverage genuinely rises; never lower it to make a red build green.
+          FLOOR: "95.0"
+        run: |
+          go test ./... -count=1 -covermode=atomic -coverprofile=cover.out | tee cover.log
+          rc=0
+          while read -r line; do
+            # The package name is pulled by pattern, not by field number: a
+            # tested package prints "ok <pkg> <time> coverage: N%" while an
+            # untested one prints "<pkg> coverage: 0.0%", so $2 means different
+            # things on the two shapes.
+            pkg=$(printf '%s' "$line" | grep -o 'github\.com/[^[:space:]]*' || true)
+            case "$line" in
+              *"no test files"*)
+                echo "::error::$pkg has no tests"
+                rc=1
+                ;;
+              *coverage:*)
+                pct=$(printf '%s' "$line" | sed -n 's/.*coverage: \([0-9.]*\)%.*/\1/p')
+                if awk "BEGIN{exit !($pct < $FLOOR)}"; then
+                  echo "::error::$pkg at ${pct}% is below the ${FLOOR}% floor"
+                  rc=1
+                else
+                  echo "ok  $pkg ${pct}% >= ${FLOOR}%"
+                fi
+                ;;
+            esac
+          done < cover.log
+          exit $rc
 
       - name: fuzz smoke (15s)
         run: go test ./aep -run '^$' -fuzz FuzzVerify -fuzztime 15s
 
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
