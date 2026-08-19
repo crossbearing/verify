@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crossbearing.dev/schema/aep-1.schema.json",
+  "title": "Agent Evidence Package (aep/1)",
+  "description": "Machine-readable counterpart to the format contract published in this repository's README. It describes the SHAPE of an aep/1 document; it cannot describe its INTEGRITY. No JSON Schema can express that link[i] equals sha256(link[i-1] || digest[i]), that digest[i] equals sha256 of the canonical finding, that the genesis hash binds the chain to this package's window and policy, or that the detached signature covers the canonical bytes. A document can satisfy this schema completely and still be forged. Validating against it is a precondition for verification, never a substitute: run the verifier. Members this verifier does not interpret (generatedAt, sessions, conventions, controls, and anything a later producer adds) are carried verbatim and covered by the signature, so the schema leaves them unconstrained rather than pinning a shape it has no authority over.",
+  "type": "object",
+  "required": ["version", "window", "policy", "findings", "chain"],
+  "properties": {
+    "version": {
+      "description": "The package format. This verifier understands exactly one.",
+      "const": "aep/1"
+    },
+    "generatedAt": {
+      "description": "When the producer emitted the package. Covered by the signature, not interpreted by the verifier.",
+      "type": "string"
+    },
+    "window": {
+      "description": "The period the evidence covers. Bound into the chain's genesis hash, so a chain cannot be transplanted onto a different window.",
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "region": { "type": "string" }
+      }
+    },
+    "policy": {
+      "description": "The match policy the corroboration join ran under. Bound into the genesis hash alongside the window.",
+      "type": "object"
+    },
+    "findings": {
+      "description": "The hash-chained findings, in chain order. The chain relationships between these entries are the verifier's business, not the schema's.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/chainedFinding" }
+    },
+    "chain": { "$ref": "#/$defs/chainHead" },
+    "signature": { "$ref": "#/$defs/signatureBundle" }
+  },
+  "$defs": {
+    "sha256Hex": {
+      "description": "A SHA-256 digest, lowercase hex.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "chainedFinding": {
+      "description": "One chain link. The finding itself is evidence content the verifier hashes but does not interpret, so its interior is unconstrained here.",
+      "type": "object",
+      "required": ["index", "finding", "digest", "prev", "link"],
+      "properties": {
+        "index": {
+          "description": "Position in the chain. The verifier requires this to equal the array index.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "finding": {
+          "description": "The evidence content. Hashed verbatim; its shape belongs to the producing engine, not to this verifier."
+        },
+        "digest": { "$ref": "#/$defs/sha256Hex" },
+        "prev": { "$ref": "#/$defs/sha256Hex" },
+        "link": { "$ref": "#/$defs/sha256Hex" }
+      }
+    },
+    "chainHead": {
+      "description": "Summary of the chain. Every field here is a claim the verifier re-derives from the document's own bytes.",
+      "type": "object",
+      "required": ["algo", "genesis", "head", "length"],
+      "properties": {
+        "algo": {
+          "description": "The only chain algorithm defined for aep/1.",
+          "const": "sha256-hex-concat"
+        },
+        "genesis": { "$ref": "#/$defs/sha256Hex" },
+        "head": { "$ref": "#/$defs/sha256Hex" },
+        "length": {
+          "description": "Declared number of findings. The verifier requires this to match the array.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "signatureBundle": {
+      "description": "The detached signature envelope. Optional: a package may be explicitly unsigned, and the verifier reports that as a distinct outcome rather than a failure. The PascalCase member names are the real wire format, produced by the engine marshalling an untagged Go struct; they are not a mistake and must not be normalised.",
+      "type": "object",
+      "required": ["Signature", "KeyRef", "Algo"],
+      "properties": {
+        "Signature": {
+          "description": "ASN.1 DER ECDSA signature, base64. Covers the document with the top-level signature member removed and insignificant whitespace stripped.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+        },
+        "KeyRef": {
+          "description": "Identifies the signing key to a reader. Carried, not trusted: the verifier checks the signature against the key it was given, not against this string.",
+          "type": "string"
+        },
+        "Algo": {
+          "description": "The only signing algorithm defined for aep/1.",
+          "const": "ECDSA_SHA_256"
+        }
+      }
+    }
+  }
+}
