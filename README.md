@@ -4,8 +4,9 @@ Offline verifier for crossbearing **Agent Evidence Packages** (format
 `aep/1`).
 
 This tool is deliberately boring: MIT-licensed, **zero dependencies**
-(`go.sum` is empty — the Go standard library is the entire supply chain),
-and it never imports the engine that produces the packages. Evidence is
+(there is no `go.sum` at all — the Go standard library is the entire supply
+chain, and CI fails if that file ever appears), and it never imports the
+engine that produces the packages. Evidence is
 only evidence if a counterparty can check it without trusting — or even
 contacting — whoever emitted it. This repo is that counterparty's tool.
 
