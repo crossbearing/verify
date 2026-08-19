@@ -126,16 +126,18 @@ jobs:
 
       - name: govulncheck
         if: ${{ !cancelled() }}
-        env:
-          # The version is hoisted into an env var so Renovate can track it. The
-          # org preset's customManager matches an annotated `*_VERSION:` binding,
-          # not an inline `tool@version` — a `# renovate:` comment above the run
-          # line below would parse, look correct, and track nothing.
-          #
-          # datasource=go resolves against the module proxy, which is what
-          # `go run` itself uses. Not github-releases: golang/vuln stopped
-          # cutting Release objects after v1.1.4 while continuing to tag, so
-          # that datasource would watch a source frozen six minor versions back.
-          # renovate: datasource=go depName=golang.org/x/vuln
-          GOVULNCHECK_VERSION: "v1.7.0"
-        run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
+        # The annotation must sit immediately above the run line and the version
+        # must stay inline after the @: the org preset's customManager matches
+        # `<annotation>\n<line containing go run …@version>`, so anything in
+        # between — including the `if:` above — puts the two on non-adjacent
+        # lines and the manager silently matches nothing.
+        #
+        # datasource=go resolves against the module proxy, which is what `go run`
+        # itself uses. Not github-releases: golang/vuln stopped cutting Release
+        # objects after v1.1.4 while continuing to tag, so that datasource would
+        # watch a source frozen six minor versions behind this pin.
+        #
+        # depName is the module path, not the package path — the proxy knows
+        # golang.org/x/vuln, not golang.org/x/vuln/cmd/govulncheck.
+        # renovate: datasource=go depName=golang.org/x/vuln
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
