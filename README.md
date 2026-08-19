@@ -83,6 +83,24 @@ Other members (`sessions`, `bindings`, `conventions`, `controls`,
 `generatedAt`) are evidence content: covered by the signature, carried
 verbatim, not interpreted here.
 
+### Machine-readable schema
+
+[`schema/aep-1.schema.json`](schema/aep-1.schema.json) is the JSON Schema
+counterpart to the table and derivations above, so a consumer can check a
+document's shape without reading English.
+
+It describes **shape**, not **integrity**. No JSON Schema can express that
+`link[i]` equals `sha256(link[i-1] || digest[i])`, that the genesis hash binds
+the chain to this package's window and policy, or that the signature covers the
+canonical bytes. **A document can satisfy the schema completely and still be
+forged** — validating against it is a precondition for verification, never a
+substitute. That boundary is pinned by a test, not just asserted here: a
+document with every hash replaced by a well-formed but wrong digest passes the
+schema and fails the verifier.
+
+The schema is checked against the engine-produced fixtures on every CI run, so
+it cannot drift from the parser without the build going red.
+
 ## Library
 
 `github.com/crossbearing/verify/aep` exposes `Verify`, `VerifyChain`,
