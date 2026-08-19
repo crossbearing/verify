@@ -84,6 +84,12 @@ type ChainHead struct {
 }
 
 // SignatureBundle is the detached signature envelope.
+//
+// The PascalCase member names are deliberate and must not be "fixed" to match
+// the lowercase members above: aep/1 documents carry this bundle exactly as
+// the producer's encoding/json emits it from an untagged struct, so the wire
+// names really are capitalized. Renaming them here would stop this verifier
+// reading real packages.
 type SignatureBundle struct {
 	Signature []byte `json:"Signature"`
 	KeyRef    string `json:"KeyRef"`
@@ -102,6 +108,9 @@ type Result struct {
 
 // Parse decodes and structurally validates an aep/1 document.
 func Parse(doc []byte) (*Package, error) {
+	if _, err := validateDocument(doc); err != nil {
+		return nil, err
+	}
 	var p Package
 	if err := json.Unmarshal(doc, &p); err != nil {
 		return nil, fmt.Errorf("not a JSON document: %w", err)
@@ -210,44 +219,28 @@ func Verify(doc []byte, pub *ecdsa.PublicKey) (Result, error) {
 // insignificant whitespace stripped, member order and value bytes
 // preserved exactly as the document carries them.
 func CanonicalPayload(doc []byte) ([]byte, error) {
-	dec := json.NewDecoder(bytes.NewReader(doc))
-	tok, err := dec.Token()
+	members, err := validateDocument(doc)
 	if err != nil {
-		return nil, fmt.Errorf("unreadable document: %w", err)
-	}
-	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return nil, fmt.Errorf("document is not a JSON object")
+		return nil, err
 	}
 
 	var out bytes.Buffer
 	out.WriteByte('{')
 	first := true
-	for dec.More() {
-		keyTok, err := dec.Token()
-		if err != nil {
-			return nil, fmt.Errorf("unreadable member name: %w", err)
-		}
-		key, ok := keyTok.(string)
-		if !ok {
-			return nil, fmt.Errorf("non-string member name %v", keyTok)
-		}
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			return nil, fmt.Errorf("unreadable value for %q: %w", key, err)
-		}
-		if key == "signature" {
+	for _, m := range members {
+		if m.key == "signature" {
 			continue
 		}
 		if !first {
 			out.WriteByte(',')
 		}
 		first = false
-		keyJSON, _ := json.Marshal(key)
+		keyJSON, _ := json.Marshal(m.key)
 		out.Write(keyJSON)
 		out.WriteByte(':')
-		canon, err := compact(raw)
+		canon, err := compact(m.raw)
 		if err != nil {
-			return nil, fmt.Errorf("value for %q: %w", key, err)
+			return nil, fmt.Errorf("value for %q: %w", m.key, err)
 		}
 		out.Write(canon)
 	}
@@ -279,6 +272,141 @@ func ParsePublicKey(material []byte) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("key is %T, want ECDSA (the aep/1 signing algorithm)", pub)
 	}
 	return ec, nil
+}
+
+// maxNestingDepth bounds recursion while validating a document. Nothing an
+// aep/1 package legitimately carries comes close; the bound exists so a
+// hostile document cannot exhaust the stack before verification can refuse it.
+const maxNestingDepth = 100
+
+// validateDocument rejects a document that names the same member twice at any
+// depth, that is not a single well-formed JSON object, or that nests deeper
+// than maxNestingDepth.
+//
+// Go's encoding/json resolves a repeated member last-wins; other readers take
+// the first. A document carrying two "signature" members therefore verifies
+// against one of them here while a different tool shows the other, and the
+// reader who checked it and the reader who didn't disagree about what was
+// checked — which is precisely what a verifier claiming "these bytes are what
+// was signed" cannot permit.
+//
+// The check runs at every depth because the shallow version is not a fix. A
+// finding carrying {"id":"benign","id":"malicious"} hash-chains and signs
+// exactly as consistently as an honest one: the digest covers the finding's
+// bytes and compact() is a lexical transform that preserves both members, so
+// every internal check agrees while the two readers still disagree. Duplicates
+// are worst precisely where the evidence lives.
+//
+// They are refused rather than resolved: no reading of such a document is more
+// correct than another, so the only honest answer is to refuse it.
+func validateDocument(doc []byte) ([]topLevelMember, error) {
+	dec := json.NewDecoder(bytes.NewReader(doc))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("unreadable document: %w", err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, fmt.Errorf("document is not a JSON object")
+	}
+
+	var members []topLevelMember
+	seen := make(map[string]bool)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("unreadable member name: %w", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("non-string member name %v", keyTok)
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate member %q at the top level: the document states it twice, and readers disagree about which one counts", key)
+		}
+		seen[key] = true
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, fmt.Errorf("unreadable value for %q: %w", key, err)
+		}
+		if err := validateValue(json.NewDecoder(bytes.NewReader(raw)), key, 1); err != nil {
+			return nil, err
+		}
+		members = append(members, topLevelMember{key: key, raw: raw})
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, fmt.Errorf("unterminated document: %w", err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("trailing content after the top-level object")
+	}
+	return members, nil
+}
+
+// topLevelMember is one member of the document's top-level object, kept in
+// document order so the canonical payload can be rebuilt without a second walk.
+type topLevelMember struct {
+	key string
+	raw json.RawMessage
+}
+
+// validateObject consumes members through the closing brace of a nested object.
+// The opening brace has already been read.
+func validateObject(dec *json.Decoder, path string, depth int) error {
+	if depth > maxNestingDepth {
+		return fmt.Errorf("%s: nested deeper than %d levels", path, maxNestingDepth)
+	}
+	seen := make(map[string]bool)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("unreadable member name: %w", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return fmt.Errorf("non-string member name %v", keyTok)
+		}
+		if seen[key] {
+			return fmt.Errorf("duplicate member %q at %s: the document states it twice, and readers disagree about which one counts", key, path)
+		}
+		seen[key] = true
+		if err := validateValue(dec, path+"."+key, depth); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return fmt.Errorf("unterminated object at %s: %w", path, err)
+	}
+	return nil
+}
+
+// validateValue consumes exactly one value, descending into objects and arrays.
+func validateValue(dec *json.Decoder, path string, depth int) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("unreadable value at %s: %w", path, err)
+	}
+	d, ok := tok.(json.Delim)
+	if !ok {
+		return nil // a scalar holds no members
+	}
+	switch d {
+	case '{':
+		return validateObject(dec, path, depth+1)
+	case '[':
+		if depth+1 > maxNestingDepth {
+			return fmt.Errorf("%s: nested deeper than %d levels", path, maxNestingDepth)
+		}
+		for i := 0; dec.More(); i++ {
+			if err := validateValue(dec, fmt.Sprintf("%s[%d]", path, i), depth+1); err != nil {
+				return err
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return fmt.Errorf("unterminated array at %s: %w", path, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("unexpected %v at %s", d, path)
 }
 
 // genesisHash mirrors the producer: sha256 over the canonical JSON of
