@@ -126,4 +126,19 @@ jobs:
 
       - name: govulncheck
         if: ${{ !cancelled() }}
+        # The annotation must sit immediately above the run line and the version
+        # must stay inline after the @: the org preset's customManager matches
+        # `<annotation>\n<line containing go run …@version>`, so anything in
+        # between — including the `if:` above — puts the two on non-adjacent
+        # lines and the manager silently matches nothing.
+        #
+        # datasource=go resolves against the module proxy, which is the source
+        # `go run` itself reads, so every version offered is one this line can
+        # resolve. github-releases tracks GitHub Release objects, and a module
+        # can tag a version without publishing a Release behind it — leaving
+        # that datasource watching a subset of what the proxy serves.
+        #
+        # depName is the module path, not the package path — the proxy knows
+        # golang.org/x/vuln, not golang.org/x/vuln/cmd/govulncheck.
+        # renovate: datasource=go depName=golang.org/x/vuln
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...

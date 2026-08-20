@@ -30,6 +30,9 @@ verify package.json --public-key key.b64     # base64 DER accepted directly
 
 # chain-only (no key available)
 verify package.json --chain-only
+
+# machine-readable result on stdout, nothing else — for agents and CI
+verify package.json --public-key key.pem --json
 ```
 
 Exit codes: `0` every requested check passed · `1` verification failed,
@@ -47,6 +50,33 @@ or the package is signed and no key was given (fail closed) · `2` usage.
    bytes, verified against the public key you supply. The signer is
    typically an AWS KMS key in the producer's account; verification
    needs only the public half.
+
+### Machine-readable output
+
+`--json` writes the result of
+[`schema/verify-result-1.schema.json`](schema/verify-result-1.schema.json) to
+stdout and nothing else, so it pipes without filtering; diagnostics stay on
+stderr in both modes. Prose is the default, because a human runs this.
+
+```json
+{
+  "verified": false,
+  "chain": { "verified": true, "links": 3 },
+  "signature": { "state": "unchecked", "keyRef": "alias/crossbearing-evidence" },
+  "error": "package is signed (…) but no --public-key was given; pass the key or --chain-only"
+}
+```
+
+Branch on `verified`. It is true only when every check you asked for actually
+ran and passed, and it **agrees with the exit code in every case** — the two are
+one decision rendered twice, and a test asserts they cannot diverge. The other
+members are evidence for that verdict, not inputs to recombine: a chain that
+verified says nothing about whether a signature went unchecked, so
+`chain.verified` alone must never be read as "the package verified".
+
+`signature.state` is `absent`, `verified`, or `unchecked`. The last is not by
+itself a failure — whether it is one depends on whether you passed
+`--chain-only`, which is exactly the judgement `verified` carries.
 
 ## The aep/1 format (verifier's contract)
 

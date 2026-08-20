@@ -7,8 +7,14 @@
 //
 //	verify <package.json> --public-key <key.pem|key.b64>
 //	verify <package.json> --chain-only
+//	verify <package.json> --public-key <key> --json
 //
 // Flags may appear before or after the package path.
+//
+// Output is prose by default, because a human runs this. --json writes the
+// result of schema/verify-result-1.schema.json to stdout instead, and nothing
+// else, so it can be piped without filtering; diagnostics stay on stderr in
+// both modes. The exit code is identical either way.
 //
 // The public key is the signing key's public half, as PEM or as the raw
 // base64 DER printed by:
@@ -21,6 +27,7 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -43,7 +50,7 @@ const (
 	exitOK      = 0
 	exitFailed  = 1
 	exitUsage   = 2
-	usageString = "usage: verify <package.json> [--public-key <pem|b64>] [--chain-only]"
+	usageString = "usage: verify <package.json> [--public-key <pem|b64>] [--chain-only] [--json]"
 )
 
 func main() {
@@ -58,6 +65,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	keyPath := fs.String("public-key", "", "signing key public half (PEM, or base64 DER from `aws kms get-public-key`)")
 	chainOnly := fs.Bool("chain-only", false, "verify the hash chain only; accept an unchecked signature")
+	asJSON := fs.Bool("json", false, "write the machine-readable result to stdout instead of prose")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, usageString)
 		fs.PrintDefaults()
@@ -100,25 +108,76 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	res, err := aep.Verify(doc, pub)
-	if err != nil {
-		fmt.Fprintf(stderr, "verify: FAILED: %v\n", err)
-		return exitFailed
+	res, verifyErr := aep.Verify(doc, pub)
+	out := describe(res, verifyErr, *chainOnly)
+
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out.report); err != nil {
+			fmt.Fprintln(stderr, "verify:", err)
+			return exitFailed
+		}
+	} else {
+		for _, line := range out.prose {
+			fmt.Fprintln(stdout, line)
+		}
+	}
+	for _, line := range out.diagnostics {
+		fmt.Fprintln(stderr, line)
+	}
+	return out.code
+}
+
+// outcome is one verification rendered three ways that must agree: the exit
+// code, the machine-readable report, and the prose. They are produced together
+// so no output mode can be changed without the others being looked at.
+type outcome struct {
+	report      aep.Report
+	code        int
+	prose       []string // stdout, prose mode only
+	diagnostics []string // stderr, both modes
+}
+
+// describe decides what happened. It is the single place the fail-closed rule
+// lives: a package carrying a signature nobody checked is a failure unless the
+// caller explicitly accepted that with --chain-only.
+func describe(res aep.Result, verifyErr error, acceptUnchecked bool) outcome {
+	report := aep.Report{
+		Chain:     aep.ChainReport{Verified: res.ChainOK, Links: res.Links},
+		Signature: aep.SignatureReport{State: aep.SignatureState(res), KeyRef: res.KeyRef},
 	}
 
-	fmt.Fprintf(stdout, "chain      OK — %d findings re-derive from genesis to head\n", res.Links)
+	if verifyErr != nil {
+		report.Error = verifyErr.Error()
+		return outcome{
+			report:      report,
+			code:        exitFailed,
+			diagnostics: []string{fmt.Sprintf("verify: FAILED: %v", verifyErr)},
+		}
+	}
+
+	prose := []string{fmt.Sprintf("chain      OK — %d findings re-derive from genesis to head", res.Links)}
+
 	switch {
 	case res.SigOK:
-		fmt.Fprintf(stdout, "signature  OK — ECDSA verified against %s\n", res.KeyRef)
-	case res.Signed && *chainOnly:
-		fmt.Fprintf(stdout, "signature  PRESENT, not checked (--chain-only) — key ref %s\n", res.KeyRef)
+		prose = append(prose, fmt.Sprintf("signature  OK — ECDSA verified against %s", res.KeyRef))
+	case res.Signed && acceptUnchecked:
+		prose = append(prose, fmt.Sprintf("signature  PRESENT, not checked (--chain-only) — key ref %s", res.KeyRef))
 	case res.Signed:
-		fmt.Fprintf(stderr, "verify: FAILED: package is signed (%s) but no --public-key was given; pass the key or --chain-only\n", res.KeyRef)
-		return exitFailed
+		report.Error = fmt.Sprintf("package is signed (%s) but no --public-key was given; pass the key or --chain-only", res.KeyRef)
+		return outcome{
+			report:      report,
+			code:        exitFailed,
+			prose:       prose,
+			diagnostics: []string{"verify: FAILED: " + report.Error},
+		}
 	default:
-		fmt.Fprintf(stdout, "signature  ABSENT — package is explicitly unsigned\n")
+		prose = append(prose, "signature  ABSENT — package is explicitly unsigned")
 	}
-	return exitOK
+
+	report.Verified = true
+	return outcome{report: report, code: exitOK, prose: prose}
 }
 
 // errFlagReported marks a parse failure the FlagSet has already printed, so
