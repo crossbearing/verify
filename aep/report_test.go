@@ -33,7 +33,7 @@ func TestReport_EveryOutcomeSatisfiesThePublishedSchema(t *testing.T) {
 			},
 		},
 		{
-			name: "signature present but deliberately unchecked",
+			name: "signature present and accepted unchecked",
 			report: Report{
 				Verified:  true,
 				Chain:     ChainReport{Verified: true, Links: 3},
@@ -86,7 +86,7 @@ func TestReport_EveryOutcomeSatisfiesThePublishedSchema(t *testing.T) {
 // decoration. This is the negative half of the test above: without it, a
 // checker that ignored "enum" would still pass everything.
 func TestReport_SchemaRejectsAnUnpublishedSignatureState(t *testing.T) {
-	doc := []byte(`{"verified":true,"chain":{"verified":true,"links":1},"signature":{"state":"probably-fine"}}`)
+	doc := []byte(`{"verified":true,"chain":{"verified":true,"links":1},"signature":{"state":"not-a-published-state"}}`)
 	problems := validateAgainstSchema(t, resultSchema, doc)
 	if len(problems) == 0 {
 		t.Fatal("schema accepted a signature state it does not publish")
