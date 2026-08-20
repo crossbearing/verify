@@ -43,9 +43,9 @@ type ChainReport struct {
 	Links int `json:"links"`
 }
 
-// Signature states. A signature that is present but unchecked is deliberately
-// not reported as a kind of failure — whether it is one depends on what the
-// caller asked for, and that judgement belongs in Report.Verified.
+// Signature states. A signature present but unchecked is not a failure state:
+// whether it is a failure depends on what the caller asked for, and that
+// judgement belongs in Report.Verified.
 const (
 	// SignatureAbsent means the package carries no signature and says so.
 	SignatureAbsent = "absent"
