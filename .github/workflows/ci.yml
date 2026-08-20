@@ -50,15 +50,15 @@ jobs:
           # signature verification and the fail-closed exit, which the testing
           # rubric singles out as security-critical and asks for 100% on.
           #
-          # 100% is not attainable here without deleting correct code. Three
-          # statements in aep are unreachable by construction: two `.(string)`
-          # assertions on JSON object keys, which the decoder guarantees are
-          # strings, and one compact() error on bytes already validated. main()
-          # is likewise uncoverable, being the os.Exit wrapper around run().
+          # 100% is not attainable without deleting correct code. Some statements
+          # are unreachable by construction: type assertions the JSON decoder's
+          # contract already guarantees, an error return on bytes that decoder
+          # has already validated, and main(), which is the os.Exit wrapper
+          # around run().
           #
-          # So the floor is set high enough to catch a real regression and low
-          # enough not to demand the removal of defensive code. Raise it when
-          # coverage genuinely rises; never lower it to make a red build green.
+          # So the floor is set high enough to catch a regression and low enough
+          # not to demand the removal of defensive code. Raise it when coverage
+          # rises; never lower it to make a red build green.
           FLOOR: "95.0"
         run: |
           set -o pipefail

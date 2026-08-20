@@ -578,9 +578,10 @@ func TestValidateDocument_AcceptsHonestNesting(t *testing.T) {
 	}
 }
 
-// A hostile document must be refused rather than exhaust the stack. The
-// verifier's own toolchain advisory this month was a missing recursion bound in
-// encoding/asn1, which is the same failure in a neighbouring parser.
+// Recursion over attacker-supplied structure is a stack-exhaustion primitive
+// unless it is bounded, and a verifier reads structure chosen by whoever wants
+// the package to verify. The bound is refused-not-descended, so a document that
+// exceeds it is rejected rather than survived.
 func TestValidateDocument_BoundsNesting(t *testing.T) {
 	deep := strings.Repeat(`{"a":`, maxNestingDepth+50) + `1` + strings.Repeat(`}`, maxNestingDepth+50)
 	_, err := validateDocument([]byte(deep))

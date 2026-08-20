@@ -184,9 +184,9 @@ func describe(res aep.Result, verifyErr error, acceptUnchecked bool) outcome {
 // the caller does not report it twice.
 var errFlagReported = errors.New("flag parse error")
 
-// classifyParseError keeps flag.ErrHelp distinguishable from a real failure.
-// Both have already been reported by the FlagSet, but one of them is a request
-// the user made deliberately and must not be answered with a failing exit code.
+// classifyParseError keeps flag.ErrHelp distinguishable from a parse failure.
+// The FlagSet has already reported both, but one of them is a request rather
+// than a mistake, and must not be answered with a failing exit code.
 func classifyParseError(err error) error {
 	if errors.Is(err, flag.ErrHelp) {
 		return err
