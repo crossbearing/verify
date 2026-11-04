@@ -314,7 +314,7 @@ func validateDocument(doc []byte) ([]topLevelMember, error) {
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
-			return nil, fmt.Errorf("unreadable member name: %w", err)
+			return nil, fmt.Errorf("unterminated document: unreadable member name: %w", err)
 		}
 		key, ok := keyTok.(string)
 		if !ok {
@@ -359,7 +359,8 @@ func validateObject(dec *json.Decoder, path string, depth int) error {
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
-			return fmt.Errorf("unreadable member name: %w", err)
+			// Named as unterminated for the reason given in validateToken's array case.
+			return fmt.Errorf("unterminated object at %s: unreadable member name: %w", path, err)
 		}
 		key, ok := keyTok.(string)
 		if !ok {
@@ -385,6 +386,11 @@ func validateValue(dec *json.Decoder, path string, depth int) error {
 	if err != nil {
 		return fmt.Errorf("unreadable value at %s: %w", path, err)
 	}
+	return validateToken(dec, tok, path, depth)
+}
+
+// validateToken finishes the value whose first token has already been read.
+func validateToken(dec *json.Decoder, tok json.Token, path string, depth int) error {
 	d, ok := tok.(json.Delim)
 	if !ok {
 		return nil // a scalar holds no members
@@ -397,7 +403,15 @@ func validateValue(dec *json.Decoder, path string, depth int) error {
 			return fmt.Errorf("%s: nested deeper than %d levels", path, maxNestingDepth)
 		}
 		for i := 0; dec.More(); i++ {
-			if err := validateValue(dec, fmt.Sprintf("%s[%d]", path, i), depth+1); err != nil {
+			// Input that ends inside an array is reported here, not as an
+			// unreadable element: whether More() reports another element at
+			// end of input differs between Go releases (1.27 says yes), and the
+			// answer must not depend on which toolchain built the verifier.
+			tok, err := dec.Token()
+			if err != nil {
+				return fmt.Errorf("unterminated array at %s: %w", path, err)
+			}
+			if err := validateToken(dec, tok, fmt.Sprintf("%s[%d]", path, i), depth+1); err != nil {
 				return err
 			}
 		}
